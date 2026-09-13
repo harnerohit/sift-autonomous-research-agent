@@ -2,7 +2,6 @@ import streamlit as st
 import html
 from app.graph import build_graph
 
-
 st.set_page_config(
     page_title="Autonomous Research Agent",
     page_icon="◈",
@@ -268,7 +267,11 @@ if run_research:
         }
 
         with st.spinner("Researching your topic..."):
-            result = graph.invoke(initial_state)
+            try:
+                result = graph.invoke(initial_state)
+            except Exception:
+                st.error("Something went wrong. Please try again.")
+                st.stop()
 
         report = result["report"]
 

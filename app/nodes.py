@@ -1,28 +1,22 @@
+from groq import RateLimitError
+from langchain_core.exceptions import OutputParserException
 from langchain_groq import ChatGroq
-
-from app.config import GROQ_API_KEY
-from app.schemas import QueryPlan
-
-
+from pydantic import ValidationError
 from tavily import TavilyClient
 
-from app.config import TAVILY_API_KEY
+from app.config import GROQ_API_KEY, TAVILY_API_KEY
+from app.schemas import FactList, QueryPlan, ResearchReport
 from app.tools import search_tavily
 
-from app.schemas import FactList
-
-from app.schemas import FactList, QueryPlan, ResearchReport
-
-from pydantic import ValidationError
-from langchain_core.exceptions import OutputParserException
 
 def planner(state: dict) -> dict:
-    """Generate 3–5 focused search queries from the research topic."""
+    """Generate 3-5 focused search queries from the research topic."""
 
     llm = ChatGroq(
         model="openai/gpt-oss-20b",
         api_key=GROQ_API_KEY,
         temperature=0,
+        max_tokens=1024,
     )
 
     structured_llm = llm.with_structured_output(QueryPlan)
@@ -65,13 +59,26 @@ def analyzer(state: dict) -> dict:
         model="openai/gpt-oss-20b",
         api_key=GROQ_API_KEY,
         temperature=0,
+        max_tokens=2048,
     )
 
     structured_llm = llm.with_structured_output(
-    FactList,
-    method="json_schema",
-    strict=True,
-)
+        FactList,
+        method="json_schema",
+        strict=True,
+    )
+
+    trimmed_results = []
+
+    for search in state["search_results"]:
+        for result in search["results"]:
+            trimmed_results.append(
+                {
+                    "title": result["title"],
+                    "content": result["content"][:400],
+                    "url": result["url"],
+                }
+            )
 
     prompt = f"""
 You are a research analyst.
@@ -79,13 +86,14 @@ You are a research analyst.
 Extract the important, factual statements from the research search results below.
 
 Rules:
-- Return only useful factual statements.
+- Return 5 to 8 concise factual statements.
+- Each fact should be one short sentence.
 - Remove duplicates and irrelevant information.
 - Do not invent information.
 - Base every fact only on the provided search results.
 
 Search results:
-{state["search_results"]}
+{trimmed_results}
 """
 
     result = structured_llm.invoke(prompt)
@@ -101,6 +109,7 @@ def writer(state: dict) -> dict:
         model="openai/gpt-oss-20b",
         api_key=GROQ_API_KEY,
         temperature=0,
+        max_tokens=2048,
     )
 
     structured_llm = llm.with_structured_output(
@@ -117,9 +126,11 @@ Write a clear, factual research report using only the facts provided below.
 Requirements:
 - Create a concise title.
 - Write a concise summary.
-- Organize the information into meaningful sections.
+- Organize the information into no more than 5 meaningful sections.
+- Keep each section focused and reasonably short.
 - Include the source URLs from the research results.
 - Do not invent facts or sources.
+- Do not repeat information.
 - Every section must contain useful content.
 
 Facts:
@@ -136,7 +147,7 @@ Sources:
             "report": result
         }
 
-    except (ValidationError, OutputParserException) as error:
+    except (RateLimitError,ValidationError, OutputParserException) as error:
         print(f"Writer validation failed: {error}")
 
         return {
